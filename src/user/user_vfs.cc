@@ -121,7 +121,7 @@ VFS::VFS(mjVFS* vfs) : self_(vfs) {
   };
 
   default_provider_.prefix = nullptr;
-  default_mount_.vfs = self_;
+  default_mount_.vfs = CurrentVfs();
   default_mount_.provider = &default_provider_;
   default_mount_.data = nullptr;
   default_mount_.name = nullptr;
@@ -245,7 +245,7 @@ int VFS::Read(mjResource* resource, const void** buffer) {
 VFS::ResourcePtr VFS::CreateResource(std::string_view name,
                                      const mjpResourceProvider* provider) {
   mjResource* res = new mjResource();
-  res->vfs = self_;
+  res->vfs = CurrentVfs();
   res->provider = provider;
   res->data = nullptr;
   res->name = new char[name.size() + 1];
@@ -312,7 +312,7 @@ mjResource* VFS::FindMount(const std::string& fullpath) {
 
 void VFS::MaybeSelfDestruct() {
   if (destructor_) {
-    destructor_(self_);
+    destructor_(CurrentVfs());
   }
 }
 
@@ -320,12 +320,44 @@ void VFS::SetToSelfDestruct(std::function<void(mjVFS*)> destructor) {
   destructor_ = std::move(destructor);
 }
 
+mjVFS* VFS::CurrentVfs() const {
+  return self_.load(std::memory_order_relaxed);
+}
+
+void VFS::Rebind(mjVFS* vfs) {
+  if (!vfs) {
+    return;
+  }
+
+  mjVFS* previous = self_.exchange(vfs, std::memory_order_relaxed);
+  if (previous == vfs) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  default_mount_.vfs = vfs;
+  for (auto& [ptr, res] : open_resources_) {
+    res->vfs = vfs;
+  }
+  for (auto& [path, res] : mounts_) {
+    res->vfs = vfs;
+  }
+}
+
 VFS* VFS::Upcast(mjVFS* vfs) {
-  return vfs ? static_cast<VFS*>(vfs->impl_) : nullptr;
+  VFS* impl = vfs ? static_cast<VFS*>(vfs->impl_) : nullptr;
+  if (impl) {
+    impl->Rebind(vfs);
+  }
+  return impl;
 }
 
 const VFS* VFS::Upcast(const mjVFS* vfs) {
-  return vfs ? static_cast<const VFS*>(vfs->impl_) : nullptr;
+  const VFS* impl = vfs ? static_cast<const VFS*>(vfs->impl_) : nullptr;
+  if (impl) {
+    const_cast<VFS*>(impl)->Rebind(const_cast<mjVFS*>(vfs));
+  }
+  return impl;
 }
 
 }  // namespace mujoco::user

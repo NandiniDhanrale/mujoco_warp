@@ -17,6 +17,7 @@
 #ifndef MUJOCO_SRC_USER_USER_VFS_H_
 #define MUJOCO_SRC_USER_USER_VFS_H_
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -102,6 +103,12 @@ class VFS {
   static VFS* Upcast(mjVFS* vfs);
   static const VFS* Upcast(const mjVFS* vfs);
 
+  // Rebinds the implementation to the current mjVFS wrapper address.
+  void Rebind(mjVFS* vfs);
+
+  // Returns the current bound mjVFS wrapper address.
+  mjVFS* CurrentVfs() const;
+
  private:
   using ResourcePtr = std::unique_ptr<mjResource, void (*)(mjResource*)>;
   ResourcePtr CreateResource(std::string_view name,
@@ -117,7 +124,7 @@ class VFS {
   // that `this` will be invalidated after this call.
   void MaybeSelfDestruct();
 
-  mjVFS* self_;
+  std::atomic<mjVFS*> self_;
   std::mutex mutex_;  // Protects open_resources_ and mounts_.
   std::unordered_map<mjResource*, ResourcePtr> open_resources_;
   std::unordered_map<std::string, ResourcePtr> mounts_;
